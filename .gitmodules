@@ -1,3 +1,0 @@
-[submodule "tweet2vec"]
-	path = tweet2vec
-	url = git@github.com:bdhingra/tweet2vec.git
