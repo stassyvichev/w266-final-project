@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # w266 final project version - SMV
-# call like this: ./tweet2vec_encoder.sh text_only_file.csv tweet2vec/tweet2vec/best_model/ encoded_data
+# call like this: ./tweet2vec_encoder.sh data/labeled_data_text_only.csv tweet2vec/tweet2vec/best_model/ data/encoded_data
 
 infile="$1"
 datafile="${infile}.preprocessed"
