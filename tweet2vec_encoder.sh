@@ -1,17 +1,25 @@
 #!/bin/bash
 
-# w266 final project version - stan
-# specify data file here
-datafile="Colorado_Flu_Study_Tweets_Text_Only_Preprocessed.csv"
+# w266 final project version - SMV
+# call like this: ./tweet2vec_encoder.sh text_only_file.csv tweet2vec/tweet2vec/best_model/ encoded_data
 
-# specify model path here
-modelpath="tweet2vec/tweet2vec/best_model/"
+infile="$1"
+datafile="${infile}.preprocessed"
+modelpath="$2" # "tweet2vec/tweet2vec/best_model/"
+resultpath="$3"
 
-# specify result path here
-resultpath="encoded_data/"
+echo "Inputs:"
+echo $infile
+echo $datafile
+echo $modelpath
+echo $resultpath
 
+echo "Preprocessing:"
+python tweet2vec/misc/preprocess.py $infile $datafile
+
+echo "Create result dir"
 mkdir -p $resultpath
 
-# test
+echo "Run encoder"
 python tweet2vec/tweet2vec/encode_char.py $datafile $modelpath $resultpath
-
+echo "Done"
