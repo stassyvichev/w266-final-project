@@ -120,4 +120,6 @@ def classifierModelFn(features, labels, mode, params):
                                       loss=regularized_loss_,
                                       train_op=train_op_,
                                       eval_metric_ops=eval_metrics)
+
+# TODO: use the Estimator API as it was used in NeuralBOW.ipynb in A2, adjust parameters, train and test...
         
