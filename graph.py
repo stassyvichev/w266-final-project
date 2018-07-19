@@ -1,10 +1,5 @@
 import tensorflow as tf
 
-def affineLayer(hidden_dim, x):
-    W = tf.get_variable("W", shape=[x.get_shape().as_list()[1], hidden_dim],initializer=tf.contrib.layers.xavier_initializer())
-    b = tf.get_variable(name="b", shape=(hidden_dim), initializer=tf.zeros_initializer())
-    return tf.add(tf.matmul(x,W),b)
-
 def fullyConnectedLayers(h0_,hidden_dims, activation = tf.tanh, dropout_rate = 0, is_training = False):
     h_ = h0_
     for i, hdim in enumerate(hidden_dims):
@@ -15,9 +10,11 @@ def fullyConnectedLayers(h0_,hidden_dims, activation = tf.tanh, dropout_rate = 0
 
 def makeLogits(h_, num_classes):
     with tf.variable_scope("Logits"):
+#         h_ = tf.cast(h_, dtype= tf.float32)
+#         print(h_)
         W_out_ = tf.get_variable("W_out", shape = [h_.get_shape().as_list()[1], num_classes], initializer=tf.random_normal_initializer(dtype= tf.float32))
         b_out_ = tf.get_variable("b_out", shape = [num_classes], initializer = tf.zeros_initializer())
-
+#         print(b_out_)
         logits_ = tf.matmul(h_,W_out_) + b_out_
         return logits_
 
@@ -34,42 +31,22 @@ def softmaxOutputLayer(h_, labels_, num_classes):
     loss_ = makeLoss(logits_, labels_)
     return loss_, logits_
 
-def embeddingLayer(x_, ids_):
-    xs_ = tf.nn.embedding_lookup(x_, ids_)
-    return xs_
-
-def encoder(ids_, x_, ns_, hidden_dims, dropout_rate = 0, is_training = None, **unused_kw):
-    with tf.variable_scope("Embedding_Layer"):
-        xs_ = embeddingLayer(x_, ids_)
-    # Mask off the padding indices with zeros
-    #   mask_: [batch_size, max_len, 1] with values of 0.0 or 1.0
-    mask_ = tf.expand_dims(tf.sequence_mask(ns_, xs_.shape[1],
-                                            dtype=tf.float32), -1)
-    # Multiply xs_ by the mask to zero-out pad indices.
-    xs_ = tf.multiply(xs_,mask_)
-
-    # Sum embeddings: [batch_size, max_len, embed_dim] -> [batch_size, embed_dim]
-    h0_ = tf.reduce_sum(xs_, axis = 1)
-
-    # Build a stack of fully-connected layers
-    h_ = fully_connected_layers(h0_, hidden_dims, activation=tf.tanh,
-                           dropout_rate=dropout_rate, is_training=is_training)
-    return h_, xs_
-
 def classifierModelFn(features, labels, mode, params):
     # Seed the RNG for repeatability
-    tf.set_random_seed(params.get('rseed', 10))
-
+    tf.set_random_seed(params.get('rseed', 42))
+    print(labels)
     # Check if this graph is going to be used for training.
     is_training = (mode == tf.estimator.ModeKeys.TRAIN)
     with tf.variable_scope("Encoder"):
-        h_, xs_ = encoder(features['ids'], features['ns'],
-                              is_training=is_training,
-                              **params)
-        
+        xs_ = features["x"]
+        # we already have our encodings, so the first layer is our input
+        # Build a stack of fully-connected layers
+        h_ = fullyConnectedLayers(xs_, params['hidden_dims'], activation=tf.tanh,
+                           dropout_rate=params['dropout_rate'], is_training=is_training)
+        h_ = tf.cast(h_, dtype= tf.float32)
     # Construct softmax layer and loss functions
     with tf.variable_scope("Output_Layer"):
-        ce_loss_, logits_ = softmax_output_layer(h_, labels, params['num_classes'])
+        ce_loss_, logits_ = softmaxOutputLayer(h_, labels, params['num_classes'])
     
     # Some code for handling prediction
     with tf.name_scope("Prediction"):
@@ -79,8 +56,7 @@ def classifierModelFn(features, labels, mode, params):
 
     if mode == tf.estimator.ModeKeys.PREDICT:
         # If predict mode, don't bother computing loss.
-        return tf.estimator.EstimatorSpec(mode=mode,
-                                          predictions=predictions_dict)
+        return tf.estimator.EstimatorSpec(mode=mode,  predictions=predictions_dict)
     
     # L2 regularization (weight decay) on parameters, from all layers
     with tf.variable_scope("Regularization"):
