@@ -34,7 +34,7 @@ def softmaxOutputLayer(h_, labels_, num_classes):
 def classifierModelFn(features, labels, mode, params):
     # Seed the RNG for repeatability
     tf.set_random_seed(params.get('rseed', 42))
-    print(labels)
+#     print(labels)
     # Check if this graph is going to be used for training.
     is_training = (mode == tf.estimator.ModeKeys.TRAIN)
     with tf.variable_scope("Encoder"):
@@ -78,10 +78,10 @@ def classifierModelFn(features, labels, mode, params):
         elif params['optimizer']=='adam':
             optimizer_ = tf.train.AdamOptimizer(learning_rate = params['lr'], name = "adam_optimizer")
             tvars = tf.trainable_variables()
-            gradients = self.optimizer_.compute_gradients(regularized_loss_,tvars)
+            gradients = optimizer_.compute_gradients(regularized_loss_,tvars)
             grads = [x[0] for x in gradients]
             clipped, _ = tf.clip_by_global_norm(grads,params["maxGradNorm"])
-            train_op_ = self.optimizer_.apply_gradients(zip(clipped,tvars))
+            train_op_ = optimizer_.apply_gradients(zip(clipped,tvars))
         else:
             optimizer_ = tf.train.GradientDescentOptimizer(params['lr'])
             train_op_ = optimizer_.minimize(regularized_loss_,
