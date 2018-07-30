@@ -28,12 +28,12 @@ def run(data_seed=0):
 
     model = Model(RunContext(__file__, 0)) 
 
-    tensorboard_dir = model.save_tensorboard_graph()
+    tensorboard_dir = model.save_tensorboard_graph() 
     LOG.info("Saved tensorboard graph to %r", tensorboard_dir)
 
     tweetData = TweetData(data_seed, n_labeled, n_extra_unlabeled)
-    training_batches = minibatching.training_batches(svhn.training, n_labeled_per_batch=50)
-    evaluation_batches_fn = minibatching.evaluation_epoch_generator(svhn.evaluation)
+    training_batches = minibatching.training_batches(tweetData.training, n_labeled_per_batch=50)
+    evaluation_batches_fn = minibatching.evaluation_epoch_generator(tweetData.evaluation)
 
     model.train(training_batches, evaluation_batches_fn)
 

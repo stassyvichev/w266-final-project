@@ -18,7 +18,6 @@ class Model:
         # Consistency hyperparameters
         'apply_consistency_to_labeled': True,
         'max_consistency_cost': 50.0,
-        # 'ema_decay_during_rampup': 0.99,
         'ema_decay_after_rampup': 0.999,
         'num_logits': 1, # Either 1 or 2
 
@@ -35,9 +34,7 @@ class Model:
         'student_dropout_probability': 0.5,
         'teacher_dropout_probability': 0.5,
 
-        # Training schedule TODO see if we can remove these
-        'rampup_length': 40000,
-        'rampdown_length': 25000,
+        # Training schedule
         'training_length': 150000,
 
         # Whether to scale each input image to mean=0 and std=1 per channel
@@ -47,7 +44,11 @@ class Model:
         # Output schedule
         'print_span': 20,
         'evaluation_span': 500,
+
+        # list of hidden layers and their size
+        'hidden_dims':[75, 75, 75, 75]
     }
+
     def __init__(self, run_context=None):
         self.name = "Tweet Data Class"
         if run_context is not None:
@@ -86,6 +87,7 @@ class Model:
             is_training=self.is_training,
             ema_decay=self.ema_decay,
             input_noise=self.hyper['input_noise'],
+            hidden_dims = self.hyper['hidden_dims'],
             student_dropout_probability=self.hyper['student_dropout_probability'],
             teacher_dropout_probability=self.hyper['teacher_dropout_probability'],
             num_logits=self.hyper['num_logits'])
@@ -95,7 +97,7 @@ class Model:
             # I think errors are only calculated for labeled, but you don't calculate it for unlabeled, so it is NaN for unlabeled
             self.mean_error_1, self.errors_1 = errors(self.class_logits_1, self.labels)
             self.mean_error_ema, self.errors_ema = errors(self.class_logits_ema, self.labels)
-            # TODO where we calculate classification costs. You only need some of these, pi is not needed at all and I think 2 is not needed.
+            # TODO where we calculate classification costs.
             # THE cost_1 should be for student maybe and ema is for teacher maybe?
             self.mean_class_cost_1, self.class_costs_1 = classification_costs(
                 self.class_logits_1, self.labels)
@@ -125,7 +127,6 @@ class Model:
                 self.class_costs_1, self.cons_costs_mt, self.res_costs_1)
             assert_shape(self.total_costs_mt, [3])
 
-            # TODO removed PI
             self.cost_to_be_minimized = self.mean_total_cost_mt
 
         with tf.name_scope("train_step"):
@@ -249,11 +250,12 @@ class Model:
 
 # TODO understand this well
 def inference(inputs, is_training, ema_decay, input_noise, student_dropout_probability, teacher_dropout_probability,
-              normalize_input, flip_horizontally, translate, num_logits):
+              num_logits, hidden_dims):
     tower_args = dict(inputs=inputs,
                       is_training=is_training,
                       input_noise=input_noise,
-                      num_logits=num_logits)
+                      num_logits=num_logits,
+                      hidden_dims=hidden_dims)
 
     with tf.variable_scope("initialization") as var_scope:
         _ = tower(**tower_args, dropout_probability=student_dropout_probability, is_initialization=True)
@@ -271,7 +273,37 @@ def inference(inputs, is_training, ema_decay, input_noise, student_dropout_proba
     return (class_logits_1, cons_logits_1), (class_logits_2, cons_logits_2), (class_logits_ema, cons_logits_ema)
     
 # TODO create tower
+def tower(inputs,
+          is_training,
+          dropout_probability,
+          input_noise,
+          num_logits,
+          hidden_dims,
+          is_initialization=False,
+          name=None):
+    with tf.name_scope(name, "tower"):
+        default_conv_args = dict(
+            padding='SAME',
+            kernel_size=[3, 3],
+            activation_fn=lrelu,
+            init=is_initialization
+        )
+        training_mode_funcs = [
+            nn.random_translate, nn.flip_randomly, nn.gaussian_noise, slim.dropout,
+            wn.fully_connected, wn.conv2d
+        ]
+        training_args = dict(
+            is_training=is_training
+        )
 
+        h_ = fullyConnectedLayers(inputs, hidden_dims, activation=lrelu,# can use tf.tanh as well
+                           dropout_rate=dropout_probability, is_training=is_training, init = is_initialization)
+        
+        logits_ = makeLogits(h_, 2)
+
+def lrelu(inputs, leak=0.1, name=None):
+    with tf.name_scope(name, 'lrelu') as scope:
+        return tf.maximum(inputs, leak * inputs, name=scope)
 
 def adam_optimizer(cost, global_step,
                    learning_rate=0.001, beta1=0.9, beta2=0.999, epsilon=1e-8,
@@ -365,3 +397,23 @@ def total_costs(*all_costs, name=None):
         costs = tf.reduce_sum(all_costs, axis=1)
         mean_cost = tf.reduce_mean(costs, name=scope)
         return mean_cost, costs
+
+def fullyConnectedLayers(h0_,hidden_dims, activation = tf.tanh, dropout_rate = 0, is_training = False, init = False):
+    if init:
+        h_ = h0_
+        for i, hdim in enumerate(hidden_dims):
+            h_ = tf.layers.dense(h_, hdim, activation=activation, name=("Hidden_%d"%i))
+            if dropout_rate > 0:
+                h_ = tf.layers.dropout(h_,rate=dropout_rate, training=is_training)
+        h_ = tf.cast(h_, dtype= tf.float32)
+    else:
+        i = len(hidden_dims)-1
+        h_ = tf.get_variable("Hidden_%d"%i)
+    return h_
+
+def makeLogits(h_, num_classes):
+    with tf.variable_scope("Logits"):
+        W_out_ = tf.get_variable("W_out", shape = [h_.get_shape().as_list()[1], num_classes], initializer=tf.random_normal_initializer(dtype= tf.float32))
+        b_out_ = tf.get_variable("b_out", shape = [num_classes], initializer = tf.zeros_initializer())
+        logits_ = tf.matmul(h_,W_out_) + b_out_
+        return logits_
