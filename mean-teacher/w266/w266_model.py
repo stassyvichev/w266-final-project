@@ -282,24 +282,38 @@ def tower(inputs,
           is_initialization=False,
           name=None):
     with tf.name_scope(name, "tower"):
-        default_conv_args = dict(
-            padding='SAME',
-            kernel_size=[3, 3],
-            activation_fn=lrelu,
-            init=is_initialization
-        )
-        training_mode_funcs = [
-            nn.random_translate, nn.flip_randomly, nn.gaussian_noise, slim.dropout,
-            wn.fully_connected, wn.conv2d
-        ]
-        training_args = dict(
-            is_training=is_training
-        )
 
-        h_ = fullyConnectedLayers(inputs, hidden_dims, activation=lrelu,# can use tf.tanh as well
+        # TODO add noise to inputs VERY IMPORTANT
+        # TODO does it work??
+        noisy_inputs = gaussian_noise(inputs, input_noise, is_training)
+
+        # TODO is below correct?
+        h1_ = fullyConnectedLayers(noisy_inputs, hidden_dims, activation=lrelu,# can use tf.tanh as well
+                           dropout_rate=dropout_probability, is_training=is_training, init = is_initialization)
+        h2_ = fullyConnectedLayers(noisy_inputs, hidden_dims, activation=lrelu,# can use tf.tanh as well
                            dropout_rate=dropout_probability, is_training=is_training, init = is_initialization)
         
-        logits_ = makeLogits(h_, 2)
+        # TODO is the below correct actually??
+        primary_logits = makeLogits(h1_, 2)
+        secondary_logits = makeLogits(h2_, 2)
+
+        with tf.control_dependencies([tf.assert_greater_equal(num_logits, 1),
+                                        tf.assert_less_equal(num_logits, 2)]):
+            secondary_logits = tf.case([
+                (tf.equal(num_logits, 1), lambda: primary_logits),
+                (tf.equal(num_logits, 2), lambda: secondary_logits),
+            ], exclusive=True, default=lambda: primary_logits)
+
+        assert_shape(primary_logits, [None, 2])
+        assert_shape(secondary_logits, [None, 2])
+        return primary_logits, secondary_logits
+
+def gaussian_noise(inputs, scale, is_training, name=None):
+    with tf.name_scope(name, 'gaussian_noise', [inputs, scale, is_training]) as scope:
+        def do_add():
+            noise = tf.random_normal(tf.shape(inputs))
+            return inputs + noise * scale
+        return tf.cond(is_training, do_add, lambda: inputs, name=scope)
 
 def lrelu(inputs, leak=0.1, name=None):
     with tf.name_scope(name, 'lrelu') as scope:
@@ -399,6 +413,7 @@ def total_costs(*all_costs, name=None):
         return mean_cost, costs
 
 def fullyConnectedLayers(h0_,hidden_dims, activation = tf.tanh, dropout_rate = 0, is_training = False, init = False):
+    # TODO is this wrong, how do we handle training??
     if init:
         h_ = h0_
         for i, hdim in enumerate(hidden_dims):
