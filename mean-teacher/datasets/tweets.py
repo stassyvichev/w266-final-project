@@ -21,19 +21,21 @@ class Datafile:
         return self._data
 
     def _load(self):
-        self._data = np.load(path);
+        self._data = np.load(self.path);
 
 class TweetData:
-    DIR = os.path.join('..','..','data', 'data_mean_teacher')
-    FILES = {
-        'dev': Datafile(os.path.join(DIR, 'encoded_labeled_dev_data.npy')),
-        'train': Datafile(os.path.join(DIR, 'encoded_labeled_train_data.npy')),
-        'extra': Datafile(os.path.join(DIR, 'encoded_unlabeled_data.npy')),
-        'test': Datafile(os.path.join(DIR, 'encoded_labeled_test_data.npy')),
-    }
+    
 
-    def __init__(self, data_seed=42, n_extra_unlabeled=0, test_phase=False):
+    def __init__(self,data_seed=42, n_extra_unlabeled=0, test_phase=False):
         random = np.random.RandomState(seed=data_seed)
+        DIR = os.path.join('..','data', 'data_mean_teacher')
+        self.FILES = {
+            'dev': Datafile(os.path.join(DIR, 'encoded_labeled_dev_data.npy')),
+            'train': Datafile(os.path.join(DIR, 'encoded_labeled_train_data.npy')),
+            'extra': Datafile(os.path.join(DIR, 'encoded_unlabeled_data.npy')),
+            'test': Datafile(os.path.join(DIR, 'encoded_labeled_test_data.npy')),
+        }
+        print(self.FILES['dev'])
         
         if test_phase:
             self.evaluation, self.training = self.FILES['dev'].data, self.FILES['train'].data
