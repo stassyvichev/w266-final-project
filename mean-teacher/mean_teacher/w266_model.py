@@ -71,11 +71,16 @@ class W266Model:
         
         with tf.name_scope("params"):
             # Ramp-up and ramp-down has been removed for simplicity
-            self.learning_rate = tf.constant(self.hyper['max_learning_rate'], dtype = tf.float32)
-            self.adam_beta_1 = tf.constant(self.hyper['adam_beta_1_after_rampdown'], dtype = tf.float32)
-            self.cons_coefficient = tf.constant(self.hyper['max_consistency_cost'], dtype = tf.float32)
-            self.adam_beta_2 = tf.constant(self.hyper['adam_beta_2_after_rampup'], dtype = tf.float32)
-            self.ema_decay = tf.constant(self.hyper['ema_decay_after_rampup'], dtype = tf.float32)
+#             self.learning_rate = tf.constant(self.hyper['max_learning_rate'], dtype = tf.float32)
+#             self.adam_beta_1 = tf.constant(self.hyper['adam_beta_1_after_rampdown'], dtype = tf.float32)
+#             self.cons_coefficient = tf.constant(self.hyper['max_consistency_cost'], dtype = tf.float32)
+#             self.adam_beta_2 = tf.constant(self.hyper['adam_beta_2_after_rampup'], dtype = tf.float32)
+#             self.ema_decay = tf.constant(self.hyper['ema_decay_after_rampup'], dtype = tf.float32)
+            self.learning_rate =self.DEFAULT_HYPERPARAMS['max_learning_rate']
+            self.adam_beta_1 = self.DEFAULT_HYPERPARAMS['adam_beta_1_after_rampdown']
+            self.cons_coefficient = self.DEFAULT_HYPERPARAMS['max_consistency_cost']
+            self.adam_beta_2 = self.DEFAULT_HYPERPARAMS['adam_beta_2_after_rampup']
+            self.ema_decay = self.DEFAULT_HYPERPARAMS['ema_decay_after_rampup']
         
         # below is where the interesting stuff happens, mostly.
         # Inference is a function which creates the towers and sets up the different logits for the two models
@@ -87,11 +92,11 @@ class W266Model:
             self.tweets,
             is_training=self.is_training,
             ema_decay=self.ema_decay,
-            input_noise=self.hyper['input_noise'],
-            hidden_dims = self.hyper['hidden_dims'],
-            student_dropout_probability=self.hyper['student_dropout_probability'],
-            teacher_dropout_probability=self.hyper['teacher_dropout_probability'],
-            num_logits=self.hyper['num_logits'])
+            input_noise=self.DEFAULT_HYPERPARAMS['input_noise'],
+            hidden_dims = self.DEFAULT_HYPERPARAMS['hidden_dims'],
+            student_dropout_probability=self.DEFAULT_HYPERPARAMS['student_dropout_probability'],
+            teacher_dropout_probability=self.DEFAULT_HYPERPARAMS['teacher_dropout_probability'],
+            num_logits=self.DEFAULT_HYPERPARAMS['num_logits'])
         
         with tf.name_scope("objectives"):
             # something weird is done with errors for unlabeled examples. 
@@ -107,8 +112,7 @@ class W266Model:
 
             labeled_consistency = self.hyper['apply_consistency_to_labeled']
             consistency_mask = tf.logical_or(tf.equal(self.labels, -1), labeled_consistency)
-            self.mean_cons_cost_mt, self.cons_costs_mt = consistency_costs(
-                self.cons_logits_1, self.class_logits_ema, self.cons_coefficient, consistency_mask)
+            self.mean_cons_cost_mt, self.cons_costs_mt = consistency_costs( self.cons_logits_1, self.class_logits_ema, self.cons_coefficient, consistency_mask)
 
 
             def l2_norms(matrix):
@@ -118,15 +122,11 @@ class W266Model:
 
             self.mean_res_l2_1, self.res_l2s_1 = l2_norms(self.class_logits_1 - self.cons_logits_1)
             self.mean_res_l2_ema, self.res_l2s_ema = l2_norms(self.class_logits_ema - self.cons_logits_ema)
-            self.res_costs_1 = self.hyper['logit_distance_cost'] * self.res_l2s_1
-            self.mean_res_cost_1 = tf.reduce_mean(self.res_costs_1)
-            self.res_costs_ema = self.hyper['logit_distance_cost'] * self.res_l2s_ema
-            self.mean_res_cost_ema = tf.reduce_mean(self.res_costs_ema)
 
             # mean total cost is what you are optimizng. 
             self.mean_total_cost_mt, self.total_costs_mt = total_costs(
-                self.class_costs_1, self.cons_costs_mt, self.res_costs_1)
-            assert_shape(self.total_costs_mt, [3])
+                self.class_costs_1, self.cons_costs_mt)
+            assert_shape(self.total_costs_mt, [2])
 
             self.cost_to_be_minimized = self.mean_total_cost_mt
 
@@ -158,8 +158,6 @@ class W266Model:
             "train/class_cost/1": self.mean_class_cost_1,
             "train/class_cost/ema": self.mean_class_cost_ema,
             "train/cons_cost/mt": self.mean_cons_cost_mt,
-            "train/res_cost/1": self.mean_res_cost_1,
-            "train/res_cost/ema": self.mean_res_cost_ema,
             "train/total_cost/mt": self.mean_total_cost_mt,
         }
 
@@ -170,8 +168,6 @@ class W266Model:
                 "eval/error/ema": streaming_mean(self.errors_ema),
                 "eval/class_cost/1": streaming_mean(self.class_costs_1),
                 "eval/class_cost/ema": streaming_mean(self.class_costs_ema),
-                "eval/res_cost/1": streaming_mean(self.res_costs_1),
-                "eval/res_cost/ema": streaming_mean(self.res_costs_ema),
             })
             metric_variables = slim.get_local_variables(scope=metrics_scope.name)
             self.metric_init_op = tf.variables_initializer(metric_variables)
@@ -283,34 +279,40 @@ def tower(inputs,
           is_initialization=False,
           name=None):
     with tf.name_scope(name, "tower"):
+        training_mode_funcs = [
+            gaussian_noise,fully_connected
+        ]
+        training_args = dict(
+            is_training=is_training
+        )
 
-        noisy_inputs = gaussian_noise(inputs, input_noise, is_training)
+        with slim.arg_scope(training_mode_funcs, **training_args):
+            
+            noisy_inputs = gaussian_noise(inputs, input_noise, is_training)
 
-        # TODO is below correct?
-        h1_ = fullyConnectedLayers(noisy_inputs, hidden_dims, activation=lrelu,# can use tf.tanh as well
-                           dropout_rate=dropout_probability, is_training=is_training, init = is_initialization)
-        h2_ = fullyConnectedLayers(noisy_inputs, hidden_dims, activation=lrelu,# can use tf.tanh as well
-                           dropout_rate=dropout_probability, is_training=is_training, init = is_initialization)
+            # TODO is below correct?
+            h_ = fullyConnectedLayers(noisy_inputs, hidden_dims, activation=lrelu,# can use tf.tanh as well
+                               dropout_rate=dropout_probability, is_training=is_training, init = is_initialization)
+            # NOTE: below is only if we don't want to use EMA decay value
+            # primary_logits = makeLogits(h1_, 2)
+            # secondary_logits = makeLogits(h2_, 2)
+
+            # NOTE: below is the softmax, to make use of EMA decay
+            # TODO does the layer fit what is required?
+            primary_logits = fully_connected(h_, 2, init=is_initialization)
+            secondary_logits = fully_connected(h_, 2, init=is_initialization)
+            with tf.control_dependencies([tf.assert_greater_equal(num_logits, 1),
+                                            tf.assert_less_equal(num_logits, 2)]):
+                secondary_logits = tf.case([
+                    (tf.equal(num_logits, 1), lambda: primary_logits),
+                    (tf.equal(num_logits, 2), lambda: secondary_logits),
+                ], exclusive=True, default=lambda: primary_logits)
+
+            assert_shape(primary_logits, [None, 2])
+            assert_shape(secondary_logits, [None, 2])
+            return primary_logits, secondary_logits
         
-        # NOTE: below is only if we don't want to use EMA decay value
-        # primary_logits = makeLogits(h1_, 2)
-        # secondary_logits = makeLogits(h2_, 2)
-
-        # NOTE: below is the softmax, to make use of EMA decay
-        # TODO does the layer fit what is required?
-        primary_logits = fully_connected(h1_, 2, init=is_initialization)
-        secondary_logits = fully_connected(h2_, 2, init=is_initialization)
-        with tf.control_dependencies([tf.assert_greater_equal(num_logits, 1),
-                                        tf.assert_less_equal(num_logits, 2)]):
-            secondary_logits = tf.case([
-                (tf.equal(num_logits, 1), lambda: primary_logits),
-                (tf.equal(num_logits, 2), lambda: secondary_logits),
-            ], exclusive=True, default=lambda: primary_logits)
-
-        assert_shape(primary_logits, [None, 2])
-        assert_shape(secondary_logits, [None, 2])
-        return primary_logits, secondary_logits
-
+@slim.add_arg_scope
 def gaussian_noise(inputs, scale, is_training, name=None):
     with tf.name_scope(name, 'gaussian_noise', [inputs, scale, is_training]) as scope:
         def do_add():
@@ -396,7 +398,6 @@ def consistency_costs(logits1, logits2, cons_coefficient, mask, name=None):
         num_classes = 2
         assert_shape(logits1, [None, num_classes])
         assert_shape(logits2, [None, num_classes])
-        assert_shape(cons_coefficient, [])
         softmax1 = tf.nn.softmax(logits1)
         softmax2 = tf.nn.softmax(logits2)
 
@@ -414,19 +415,15 @@ def total_costs(*all_costs, name=None):
         costs = tf.reduce_sum(all_costs, axis=1)
         mean_cost = tf.reduce_mean(costs, name=scope)
         return mean_cost, costs
-
+    
+@slim.add_arg_scope
 def fullyConnectedLayers(h0_,hidden_dims, activation = tf.tanh, dropout_rate = 0, is_training = False, init = False):
-    # TODO is this wrong, how do we handle training??
-    if init:
-        h_ = h0_
-        for i, hdim in enumerate(hidden_dims):
-            h_ = tf.layers.dense(h_, hdim, activation=activation, name=("Hidden_%d"%i))
-            if dropout_rate > 0:
-                h_ = tf.layers.dropout(h_,rate=dropout_rate, training=is_training)
-        h_ = tf.cast(h_, dtype= tf.float32)
-    else:
-        i = len(hidden_dims)-1
-        h_ = tf.get_variable("Hidden_%d"%i)
+    h_ = h0_
+    for i, hdim in enumerate(hidden_dims):
+        h_ = tf.layers.dense(h_, hdim, activation=activation, name=("Hidden_%d"%i))
+        if dropout_rate > 0:
+            h_ = tf.layers.dropout(h_,rate=dropout_rate, training=is_training)
+    h_ = tf.cast(h_, dtype= tf.float32, name = ("Hidden_Layer%d"%i))
     return h_
 
 def makeLogits(h_, num_classes, is_training, eval_mean_ema_decay=0.999):
