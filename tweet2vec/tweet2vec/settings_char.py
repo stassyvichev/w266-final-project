@@ -3,7 +3,7 @@
 # Number of epochs
 NUM_EPOCHS = 30
 # Batch size
-N_BATCH = 64
+N_BATCH = 1024
 # Max sequence length
 MAX_LENGTH = 145
 # Dimensionality of character lookup
