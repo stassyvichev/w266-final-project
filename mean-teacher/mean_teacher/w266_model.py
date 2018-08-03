@@ -14,7 +14,7 @@ from tensorflow.contrib.framework.python.ops import add_arg_scope
 
 LOG = logging.getLogger('main')
 
-class Model:
+class W266Model:
     DEFAULT_HYPERPARAMS = {
         # Consistency hyperparameters
         'apply_consistency_to_labeled': True,
