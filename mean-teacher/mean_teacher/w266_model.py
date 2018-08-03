@@ -8,9 +8,11 @@ from collections import namedtuple
 import tensorflow as tf
 from tensorflow.contrib import metrics, slim
 from tensorflow.contrib.metrics import streaming_mean
+from . import w266_nn as nn
+from . import w266_wn as wn
 from .framework import ema_variable_scope, name_variable_scope, assert_shape, HyperparamVariables
 from . import string_utils
-from tensorflow.contrib.framework.python.ops import add_arg_scope
+
 
 LOG = logging.getLogger('main')
 
@@ -19,14 +21,15 @@ class W266Model:
         # Consistency hyperparameters
         'apply_consistency_to_labeled': True,
         'max_consistency_cost': 50.0,
+        'ema_decay_during_rampup': 0.99,
         'ema_decay_after_rampup': 0.999,
         'num_logits': 1, # Either 1 or 2
 
         # Optimizer hyperparameters
         'max_learning_rate': 0.003,
-        # 'adam_beta_1_before_rampdown': 0.9,
+        'adam_beta_1_before_rampdown': 0.9,
         'adam_beta_1_after_rampdown': 0.5,
-        # 'adam_beta_2_during_rampup': 0.99,
+        'adam_beta_2_during_rampup': 0.99,
         'adam_beta_2_after_rampup': 0.999,
         'adam_epsilon': 1e-8,
 
@@ -36,11 +39,9 @@ class W266Model:
         'teacher_dropout_probability': 0.5,
 
         # Training schedule
-        'training_length': 150000,
-
-        # Whether to scale each input image to mean=0 and std=1 per channel
-        # Use False if input is already normalized in some other way
-        'normalize_input': False,
+        'rampup_length': 2000,
+        'rampdown_length': 5000,
+        'training_length': 10000,
 
         # Output schedule
         'print_span': 20,
@@ -49,7 +50,7 @@ class W266Model:
         # list of hidden layers and their size
         'hidden_dims':[75, 75, 75, 75]
     }
-
+    #pylint: disable=too-many-instance-attributes
     def __init__(self, run_context=None):
         self.name = "Tweet Data Class"
         if run_context is not None:
@@ -69,18 +70,40 @@ class W266Model:
         for var in self.hyper.variables.values():
             tf.add_to_collection("init_in_init", var)
         
-        with tf.name_scope("params"):
+        with tf.name_scope("ramps"):
             # Ramp-up and ramp-down has been removed for simplicity
 #             self.learning_rate = tf.constant(self.hyper['max_learning_rate'], dtype = tf.float32)
 #             self.adam_beta_1 = tf.constant(self.hyper['adam_beta_1_after_rampdown'], dtype = tf.float32)
 #             self.cons_coefficient = tf.constant(self.hyper['max_consistency_cost'], dtype = tf.float32)
 #             self.adam_beta_2 = tf.constant(self.hyper['adam_beta_2_after_rampup'], dtype = tf.float32)
 #             self.ema_decay = tf.constant(self.hyper['ema_decay_after_rampup'], dtype = tf.float32)
-            self.learning_rate =self.DEFAULT_HYPERPARAMS['max_learning_rate']
-            self.adam_beta_1 = self.DEFAULT_HYPERPARAMS['adam_beta_1_after_rampdown']
-            self.cons_coefficient = self.DEFAULT_HYPERPARAMS['max_consistency_cost']
-            self.adam_beta_2 = self.DEFAULT_HYPERPARAMS['adam_beta_2_after_rampup']
-            self.ema_decay = self.DEFAULT_HYPERPARAMS['ema_decay_after_rampup']
+#             self.learning_rate =self.DEFAULT_HYPERPARAMS['max_learning_rate']
+#             self.adam_beta_1 = self.DEFAULT_HYPERPARAMS['adam_beta_1_after_rampdown']
+#             self.cons_coefficient = self.DEFAULT_HYPERPARAMS['max_consistency_cost']
+#             self.adam_beta_2 = self.DEFAULT_HYPERPARAMS['adam_beta_2_after_rampup']
+#             self.ema_decay = self.DEFAULT_HYPERPARAMS['ema_decay_after_rampup']
+            sigmoid_rampup_value = sigmoid_rampup(self.global_step, self.hyper['rampup_length'])
+            sigmoid_rampdown_value = sigmoid_rampdown(self.global_step,
+                                                      self.hyper['rampdown_length'],
+                                                      self.hyper['training_length'])
+            self.learning_rate = tf.multiply(sigmoid_rampup_value * sigmoid_rampdown_value,
+                                             self.hyper['max_learning_rate'],
+                                             name='learning_rate')
+            self.adam_beta_1 = tf.add(sigmoid_rampdown_value * self.hyper['adam_beta_1_before_rampdown'],
+                                      (1 - sigmoid_rampdown_value) * self.hyper['adam_beta_1_after_rampdown'],
+                                      name='adam_beta_1')
+            self.cons_coefficient = tf.multiply(sigmoid_rampup_value,
+                                                self.hyper['max_consistency_cost'],
+                                                name='consistency_coefficient')
+
+            step_rampup_value = step_rampup(self.global_step, self.hyper['rampup_length'])
+            self.adam_beta_2 = tf.add((1 - step_rampup_value) * self.hyper['adam_beta_2_during_rampup'],
+                                      step_rampup_value * self.hyper['adam_beta_2_after_rampup'],
+                                      name='adam_beta_2')
+            self.ema_decay = tf.add((1 - step_rampup_value) * self.hyper['ema_decay_during_rampup'],
+                                    step_rampup_value * self.hyper['ema_decay_after_rampup'],
+                                    name='ema_decay')
+            
         
         # below is where the interesting stuff happens, mostly.
         # Inference is a function which creates the towers and sets up the different logits for the two models
@@ -92,11 +115,11 @@ class W266Model:
             self.tweets,
             is_training=self.is_training,
             ema_decay=self.ema_decay,
-            input_noise=self.DEFAULT_HYPERPARAMS['input_noise'],
+            input_noise=self.hyper['input_noise'],
             hidden_dims = self.DEFAULT_HYPERPARAMS['hidden_dims'],
-            student_dropout_probability=self.DEFAULT_HYPERPARAMS['student_dropout_probability'],
-            teacher_dropout_probability=self.DEFAULT_HYPERPARAMS['teacher_dropout_probability'],
-            num_logits=self.DEFAULT_HYPERPARAMS['num_logits'])
+            student_dropout_probability=self.hyper['student_dropout_probability'],
+            teacher_dropout_probability=self.hyper['teacher_dropout_probability'],
+            num_logits=self.hyper['num_logits'])
         
         with tf.name_scope("objectives"):
             # something weird is done with errors for unlabeled examples. 
@@ -148,11 +171,11 @@ class W266Model:
 
         self.training_metrics = {
             # NOTE these should not need training, since we don't do ramp-up and ramp-down
-            # "learning_rate": self.learning_rate,
-            # "adam_beta_1": self.adam_beta_1,
-            # "adam_beta_2": self.adam_beta_2,
-            # "ema_decay": self.ema_decay,
-            # "cons_coefficient": self.cons_coefficient,
+            "learning_rate": self.learning_rate,
+            "adam_beta_1": self.adam_beta_1,
+            "adam_beta_2": self.adam_beta_2,
+            "ema_decay": self.ema_decay,
+            "cons_coefficient": self.cons_coefficient,
             "train/error/1": self.mean_error_1,
             "train/error/ema": self.mean_error_ema,
             "train/class_cost/1": self.mean_class_cost_1,
@@ -185,8 +208,9 @@ class W266Model:
                 var for var in tf.global_variables() if var not in init_init_variables
             ]
             self.init_init_op = tf.variables_initializer(init_init_variables)
+            print("Train init variables:")
             for var in train_init_variables:
-                print(var.name)
+                print(var)
             self.train_init_op = tf.variables_initializer(train_init_variables)
         self.saver = tf.train.Saver()
         self.session = tf.Session()
@@ -194,7 +218,10 @@ class W266Model:
     
     # TODO is this ok, do we understand it?
     def train(self, training_batches, evaluation_batches_fn):
-        
+#         self.run(tf.global_variables_initializer())
+#         print("GLOBAL VAR INITI RAN")
+        self.run(tf.local_variables_initializer())
+        print("LOCAL VAR INITI RAN")
         self.run(self.train_init_op, self.feed_dict(next(training_batches)))
         LOG.info("Model variables initialized")
         self.evaluate(evaluation_batches_fn)
@@ -232,10 +259,10 @@ class W266Model:
         return self.session.run(*args, **kwargs)
     
     def feed_dict(self, batch, is_training=True):
-        print(type(batch))
-        print(batch.shape)
-        print(batch['x'].shape)
-        print(batch['y'].shape)
+#         print(type(batch))
+#         print(batch.shape)
+#         print(batch['x'].shape)
+#         print(batch['y'].shape)
         return {
             self.tweets: batch['x'],
             self.labels: batch['y'],
@@ -250,6 +277,37 @@ class W266Model:
         writer = tf.summary.FileWriter(self.tensorboard_path)
         writer.add_graph(self.session.graph)
         return writer.get_logdir()
+
+def step_rampup(global_step, rampup_length):
+    result = tf.cond(global_step < rampup_length,
+                     lambda: tf.constant(0.0),
+                     lambda: tf.constant(1.0))
+    return tf.identity(result, name="step_rampup")
+
+
+def sigmoid_rampup(global_step, rampup_length):
+    global_step = tf.to_float(global_step)
+    rampup_length = tf.to_float(rampup_length)
+    def ramp():
+        phase = 1.0 - tf.maximum(0.0, global_step) / rampup_length
+        return tf.exp(-5.0 * phase * phase)
+
+    result = tf.cond(global_step < rampup_length, ramp, lambda: tf.constant(1.0))
+    return tf.identity(result, name="sigmoid_rampup")
+
+
+def sigmoid_rampdown(global_step, rampdown_length, training_length):
+    global_step = tf.to_float(global_step)
+    rampdown_length = tf.to_float(rampdown_length)
+    training_length = tf.to_float(training_length)
+    def ramp():
+        phase = 1.0 - tf.maximum(0.0, training_length - global_step) / rampdown_length
+        return tf.exp(-12.5 * phase * phase)
+
+    result = tf.cond(global_step >= training_length - rampdown_length,
+                     ramp,
+                     lambda: tf.constant(1.0))
+    return tf.identity(result, name="sigmoid_rampdown")
 
 # understand this well
 def inference(inputs, is_training, ema_decay, input_noise, student_dropout_probability, teacher_dropout_probability,
@@ -286,30 +344,34 @@ def tower(inputs,
           name=None):
     with tf.name_scope(name, "tower"):
         training_mode_funcs = [
-            gaussian_noise,fully_connected, fullyConnectedLayers, affine_layer, denseLayer, dropoutLayer
+            nn.gaussian_noise,wn.fully_connected, wn.affine_layer
         ]
         training_args = dict(
             is_training=is_training
         )
 
         with slim.arg_scope(training_mode_funcs, **training_args):
-            
-            noisy_inputs = gaussian_noise(inputs, input_noise)
-
+            #pylint: disable=no-value-for-parameter
+            print("Inputs in tower")
+            print(inputs.shape)
+            print(inputs[0])
+            noisy_inputs = nn.gaussian_noise(inputs, scale = input_noise, name = 'gaussian_noise')
+            print("Noisy inputs in tower")
+            print(noisy_inputs.shape)
+            print(noisy_inputs[0])
             # TODO is below correct?
             net = noisy_inputs
-            net = denseLayer(net,75, activation = lrelu,scope = "dense_1")
-            net = dropoutLayer(net,dropout_rate=dropout_probability, scope = "dropout_1")
-#             h_ = fullyConnectedLayers(noisy_inputs, hidden_dims, activation=lrelu,# can use tf.tanh as well
-#                                dropout_rate=dropout_probability, scope = "h_connected")
-            # NOTE: below is only if we don't want to use EMA decay value
-            # primary_logits = makeLogits(h1_, 2)
-            # secondary_logits = makeLogits(h2_, 2)
-
-            # NOTE: below is the softmax, to make use of EMA decay
-            # TODO does the layer fit what is required?
-            primary_logits = fully_connected(net, 2, init=is_initialization)
-            secondary_logits = fully_connected(net, 2, init=is_initialization)
+            net = wn.affine_layer(net, hidden_dims[0], activation_fn = lrelu, init = is_initialization)
+            net = slim.dropout(net, 1-dropout_probability, scope = "dropout_probability_1")
+            net = wn.affine_layer(net, hidden_dims[0], activation_fn = lrelu, init = is_initialization)
+            net = slim.dropout(net, 1-dropout_probability, scope = "dropout_probability_2")
+            net = wn.affine_layer(net, hidden_dims[0], activation_fn = lrelu, init = is_initialization)
+            net = slim.dropout(net, 1-dropout_probability, scope = "dropout_probability_3")
+            net = wn.affine_layer(net, hidden_dims[0], activation_fn = lrelu, init = is_initialization)
+            net = slim.dropout(net, 1-dropout_probability, scope = "dropout_probability_4")
+            
+            primary_logits = wn.fully_connected(net, 2, init=is_initialization)
+            secondary_logits = wn.fully_connected(net, 2, init=is_initialization)
             with tf.control_dependencies([tf.assert_greater_equal(num_logits, 1),
                                             tf.assert_less_equal(num_logits, 2)]):
                 secondary_logits = tf.case([
@@ -321,13 +383,6 @@ def tower(inputs,
             assert_shape(secondary_logits, [None, 2])
             return primary_logits, secondary_logits
         
-@slim.add_arg_scope
-def gaussian_noise(inputs, scale, is_training, name=None):
-    with tf.name_scope(name, 'gaussian_noise', [inputs, scale, is_training]) as scope:
-        def do_add():
-            noise = tf.random_normal(tf.shape(inputs))
-            return inputs + noise * scale
-        return tf.cond(is_training, do_add, lambda: inputs, name=scope)
 
 def lrelu(inputs, leak=0.1, name=None):
     with tf.name_scope(name, 'lrelu') as scope:
@@ -425,143 +480,3 @@ def total_costs(*all_costs, name=None):
         mean_cost = tf.reduce_mean(costs, name=scope)
         return mean_cost, costs
     
-@slim.add_arg_scope
-def fullyConnectedLayers(h0_,hidden_dims, activation = tf.tanh, dropout_rate = 0, is_training = False, scope = None):
-    with tf.variable_scope(scope, 'fullyConnectedLayers'):
-        h_ = h0_
-        for i, hdim in enumerate(hidden_dims):
-            h_ = tf.layers.dense(h_, hdim, activation=activation, name=("Hidden_%d"%i))
-            if dropout_rate > 0:
-                h_ = tf.layers.dropout(h_,rate=dropout_rate, training=is_training, name=("Hidden_dropout_%d"%i))
-#         h_ = tf.cast(h_, dtype= tf.float32, name = ("Hidden_Layer%d"%i))
-        return h_
-
-@slim.add_arg_scope
-def denseLayer(h_,hdim, activation = tf.tanh, is_training = False, scope = None):
-    with tf.variable_scope(scope, 'denseLayer'):
-        return tf.layers.dense(h_, hdim, activation=activation)
-
-@slim.add_arg_scope
-def dropoutLayer(h_, dropout_rate = 0, is_training = False, scope = None):
-    with tf.variable_scope(scope, 'dropoutLayer'):
-        return tf.layers.dropout(h_,rate=dropout_rate, training=is_training)
-    
-@slim.add_arg_scope
-def affine_layer(hidden_dim, x, is_training):
-    '''Create an affine transformation.
-
-    An affine transformation from linear algebra is "xW + b".
-
-    Note that we want to compute this affine function on each
-    feature vector "x" in a batch of examples and return the corresponding
-    transformed vectors, each of dimension "hidden_dim".
-
-    We'll see another way of implementing this using more sophisticated APIs
-    in Assignment 2.
-
-    Args:
-      x: an op representing the features/incoming layer.
-         The tensor that this op provides is of shape [batch_size x #features].
-         (recall batch_size is the # of examples we want to predict in parallel)
-      hidden_dim: a scalar defining the dimension of each output vector.
-
-    Returns: a tensorflow op, when evaluated returns a tensor of dimension
-             [batch_size x hidden_dim].
-
-    Hint: On scrap paper, drop a picture of the matrix math xW + b.
-    Hint: When doing the previous, make sure you draw "x" as [batch size x features]
-          and the shape of the desired output as [batch_size x hidden_dim].
-    Hint: use tf.get_variable to create trainable variables.
-    Hint: use xavier initialization to initialize "W"
-    Hint: always initialize "b" as 0s.  It isn't a constant though!
-          It needs to be a trainable variable!
-    '''
-    pass
-
-    # START YOUR CODE
-
-    # Draw the sketch suggested in the hint above.
-    # Include a photo of the sketch in your submission.
-    # In your sketch, label all matrix/vector dimensions.
-
-    # Create trainable variables "W" and "b"
-    # Hint: use tf.get_variable, tf.zeros_initializer, and tf.contrib.layers.xavier_initializer
-    W = tf.get_variable("W", shape=[x.get_shape().as_list()[1], hidden_dim],initializer=tf.contrib.layers.xavier_initializer())
-    b = tf.get_variable(name="b", shape=(hidden_dim), initializer=tf.zeros_initializer())
-    return tf.add(tf.matmul(x,W),b) 
-    # END YOUR CODE
-    
-def makeLogits(h_, num_classes, is_training, eval_mean_ema_decay=0.999):
-    with tf.variable_scope("Logits"):
-        W_out_ = tf.get_variable("W_out", shape = [h_.get_shape().as_list()[1], num_classes], initializer=tf.random_normal_initializer(dtype= tf.float32))
-        b_out_ = tf.get_variable("b_out", shape = [num_classes], initializer = tf.zeros_initializer())
-        logits_ = tf.matmul(h_,W_out_) + b_out_
-        return logits_
-
-@add_arg_scope
-def fully_connected(inputs, num_outputs,
-                    activation_fn=None, init_scale=1., init=False,
-                    eval_mean_ema_decay=0.999, is_training=None, scope=None):
-    #pylint: disable=invalid-name
-    with tf.variable_scope(scope, "fully_connected"):
-        if is_training is None:
-            is_training = tf.constant(True)
-        if init:
-            # data based initialization of parameters
-            V = tf.get_variable('V',
-                                [int(inputs.get_shape()[1]), num_outputs],
-                                tf.float32,
-                                tf.random_normal_initializer(0, 0.05),
-                                trainable=True)
-            V_norm = tf.nn.l2_normalize(V.initialized_value(), [0])
-            x_init = tf.matmul(inputs, V_norm)
-            m_init, v_init = tf.nn.moments(x_init, [0])
-            scale_init = init_scale / tf.sqrt(v_init + 1e-10)
-            g = tf.get_variable('g', dtype=tf.float32,
-                                initializer=scale_init, trainable=True)
-            b = tf.get_variable('b', dtype=tf.float32,
-                                initializer=tf.zeros_like(m_init), trainable=True)
-            x_init = tf.reshape(
-                scale_init, [1, num_outputs]) * (x_init - tf.reshape(m_init, [1, num_outputs]))
-            if activation_fn is not None:
-                x_init = activation_fn(x_init)
-            return x_init
-        else:
-            V, g, b = [tf.get_variable(var_name) for var_name in ['V', 'g', 'b']]
-
-            # use weight normalization (Salimans & Kingma, 2016)
-            inputs = tf.matmul(inputs, V)
-            training_mean = tf.reduce_mean(inputs, [0])
-
-            with tf.name_scope("eval_mean") as var_name:
-                # Note that:
-                # - We do not want to reuse eval_mean, so we take its name from the
-                #   current name_scope and create it directly with tf.Variable
-                #   instead of using tf.get_variable.
-                # - We initialize with zero to avoid initialization order difficulties.
-                #   Initializing with training_mean would probably be better.
-                eval_mean = tf.Variable(tf.zeros(shape=training_mean.get_shape()),
-                                        name=var_name,
-                                        dtype=tf.float32,
-                                        trainable=False)
-
-            def _eval_mean_update():
-                difference = (1 - eval_mean_ema_decay) * (eval_mean - training_mean)
-                return tf.assign_sub(eval_mean, difference)
-
-            def _no_eval_mean_update():
-                "Do nothing. Must return same type as _eval_mean_update."
-                return eval_mean
-
-            eval_mean_update = tf.cond(is_training, _eval_mean_update, _no_eval_mean_update)
-            tf.add_to_collection(tf.GraphKeys.UPDATE_OPS, eval_mean_update)
-            mean = tf.cond(is_training, lambda: training_mean, lambda: eval_mean)
-            inputs = inputs - mean
-            scaler = g / tf.sqrt(tf.reduce_sum(tf.square(V), [0]))
-            inputs = tf.reshape(scaler, [1, num_outputs]) * \
-                inputs + tf.reshape(b, [1, num_outputs])
-
-            # apply nonlinearity
-            if activation_fn is not None:
-                inputs = activation_fn(inputs)
-            return inputs

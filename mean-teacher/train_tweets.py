@@ -23,7 +23,7 @@ LOG = logging.getLogger('main')
 
 
 def run(data_seed=42):
-    n_extra_unlabeled = 0
+    n_extra_unlabeled = 10000
 
     model = W266Model(RunContext(__file__, 0)) 
 
