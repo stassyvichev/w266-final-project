@@ -67,7 +67,7 @@ def main(args):
 
     # Theano function
     print("Compiling theano functions...")
-#     predict = theano.function([tweet,t_mask],predictions)
+    predict = theano.function([tweet,t_mask],predictions)
     encode = theano.function([tweet,t_mask],embeddings)
 
     # Test
@@ -75,33 +75,25 @@ def main(args):
     out_pred = []
     out_emb = []
     numbatches = len(Xt)/N_BATCH + 1
-    print("Num Batches: "+str(numbatches))
     for i in range(int(numbatches)):
-        print("processing batch "+str(i))
         xr = Xt[N_BATCH*i:N_BATCH*(i+1)]
         x, x_m = batch.prepare_data(xr, chardict, n_chars=n_char)
-#         p = predict(x,x_m)
+        p = predict(x,x_m)
         e = encode(x,x_m)
-#         ranks = np.argsort(p)[:,::-1]
+        ranks = np.argsort(p)[:,::-1]
 
         for idx, item in enumerate(xr):
-#             out_pred.append(' '.join([inverse_labeldict[r] if r in inverse_labeldict else 'UNK' for r in ranks[idx,:5]]))
+            out_pred.append(' '.join([inverse_labeldict[r] if r in inverse_labeldict else 'UNK' for r in ranks[idx,:5]]))
             out_emb.append(e[idx,:])
-        print("saving")
-        stansFileName = save_path+"/embeddings_w266_"+str(i)+".npy"
-        stansNPArr = np.asarray(out_emb)
-        np.save(stansFileName,stansNPArr)
-        out_emb = []
-    print("DONE")
 
     # Save
-#     print("Saving...")
-#     with io.open('%s/predicted_tags.txt'%save_path,'w') as f:
-#         for item in out_pred:
-#             f.write(item + '\n')
-#     stansFileName = save_path+"/embeddings_w266.npy"
-#     stansNPArr = np.asarray(out_emb)
-#     np.save(stansFileName,stansNPArr)
+    print("Saving...")
+    with io.open('%s/predicted_tags.txt'%save_path,'w') as f:
+        for item in out_pred:
+            f.write(item + '\n')
+    stansFileName = save_path+"/embeddings_w266.npy"
+    stansNPArr = np.asarray(out_emb)
+    np.save(stansFileName,stansNPArr)
 #     with open('%s/embeddings.npy'%save_path,'w') as f:
 #         np.save(f,np.asarray(out_emb))
 
