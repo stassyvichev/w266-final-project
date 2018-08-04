@@ -17,4 +17,14 @@ For running the mean teacher model (adopted directly from `https://github.com/Cu
 4. To get the data in the right format for training, follow the steps in `prepare_data_for_mean_teacher.ipynb`. Adjust the unlabeled data loop depending on how many batches you ran in step 2. You can also adjust the test/train/dev split here. 
 5. To run the actual training with mean teacher, run `cd mean-teacher; python train_tweets.py`
 
+Notes:
+Main mean teacher code is in mean-teacher, specifically:
+- `mean-teacher/train_tweets.py`
+- `mean-teacher/datasets/tweets.py`
+- `mean-teacher/mean_teacher/w266_model.py`
+- `mean-teacher/mean_teacher/w266_wn.py`
+- `mean-teacher/mean_teacher/w266_nn.py`
+- The rest of it is pretty much the same as in the Curious AI's mean-teacher git repo. 
+
+
 

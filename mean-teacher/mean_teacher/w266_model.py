@@ -39,16 +39,16 @@ class W266Model:
         'teacher_dropout_probability': 0.5,
 
         # Training schedule
-        'rampup_length': 2000,
-        'rampdown_length': 5000,
-        'training_length': 10000,
+        'rampup_length': 10000,
+        'rampdown_length': 16000,
+        'training_length': 20000,
 
         # Output schedule
-        'print_span': 20,
+        'print_span': 125,
         'evaluation_span': 500,
 
         # list of hidden layers and their size
-        'hidden_dims':[75, 75, 75, 75]
+        'hidden_dims':[300, 300, 300, 300,300,300]
     }
     #pylint: disable=too-many-instance-attributes
     def __init__(self, run_context=None):
@@ -216,12 +216,18 @@ class W266Model:
         self.session = tf.Session()
         self.run(self.init_init_op)
     
+    def __setitem__(self, key, value):
+        self.hyper.assign(self.session, key, value)
+
+    def __getitem__(self, key):
+        return self.hyper.get(self.session, key)
+    
     # TODO is this ok, do we understand it?
     def train(self, training_batches, evaluation_batches_fn):
 #         self.run(tf.global_variables_initializer())
 #         print("GLOBAL VAR INITI RAN")
-        self.run(tf.local_variables_initializer())
-        print("LOCAL VAR INITI RAN")
+#         self.run(tf.local_variables_initializer())
+#         print("LOCAL VAR INITI RAN")
         self.run(self.train_init_op, self.feed_dict(next(training_batches)))
         LOG.info("Model variables initialized")
         self.evaluate(evaluation_batches_fn)
@@ -351,24 +357,19 @@ def tower(inputs,
         )
 
         with slim.arg_scope(training_mode_funcs, **training_args):
-            #pylint: disable=no-value-for-parameter
-            print("Inputs in tower")
-            print(inputs.shape)
-            print(inputs[0])
+
             noisy_inputs = nn.gaussian_noise(inputs, scale = input_noise, name = 'gaussian_noise')
-            print("Noisy inputs in tower")
-            print(noisy_inputs.shape)
-            print(noisy_inputs[0])
-            # TODO is below correct?
+
             net = noisy_inputs
             net = wn.affine_layer(net, hidden_dims[0], activation_fn = lrelu, init = is_initialization)
+            net = wn.affine_layer(net, hidden_dims[1], activation_fn = lrelu, init = is_initialization)
             net = slim.dropout(net, 1-dropout_probability, scope = "dropout_probability_1")
-            net = wn.affine_layer(net, hidden_dims[0], activation_fn = lrelu, init = is_initialization)
+            net = wn.affine_layer(net, hidden_dims[2], activation_fn = lrelu, init = is_initialization)
+            net = wn.affine_layer(net, hidden_dims[3], activation_fn = lrelu, init = is_initialization)
             net = slim.dropout(net, 1-dropout_probability, scope = "dropout_probability_2")
-            net = wn.affine_layer(net, hidden_dims[0], activation_fn = lrelu, init = is_initialization)
-            net = slim.dropout(net, 1-dropout_probability, scope = "dropout_probability_3")
-            net = wn.affine_layer(net, hidden_dims[0], activation_fn = lrelu, init = is_initialization)
-            net = slim.dropout(net, 1-dropout_probability, scope = "dropout_probability_4")
+            net = wn.affine_layer(net, hidden_dims[4], activation_fn = lrelu, init = is_initialization)
+            net = wn.affine_layer(net, hidden_dims[5], activation_fn = lrelu, init = is_initialization)
+            net = slim.dropout(net, 1-dropout_probability, scope = "dropout_probability_2")
             
             primary_logits = wn.fully_connected(net, 2, init=is_initialization)
             secondary_logits = wn.fully_connected(net, 2, init=is_initialization)

@@ -38,13 +38,17 @@ class TweetData:
         print(self.FILES['dev'])
         
         if test_phase:
-            self.evaluation, self.training = self.FILES['dev'].data, self.FILES['train'].data
-        else:
             self.evaluation, self.training = self.FILES['test'].data, self.FILES['train'].data
+        else:
+            self.evaluation, self.training = self.FILES['dev'].data, self.FILES['train'].data
 
         if n_extra_unlabeled > 0:
+#             print(self.training.shape)
             self.training = self._add_extra_unlabeled(self.training, n_extra_unlabeled, random)
+#             print(self.training.shape)
 
     def _add_extra_unlabeled(self, data, n_extra_unlabeled, random):
+#         print(self.FILES['extra'].data.shape)
         extra_unlabeled, _ = random_partitions(self.FILES['extra'].data, n_extra_unlabeled, random)
+#         print(extra_unlabeled.shape)
         return np.concatenate([data, extra_unlabeled])
