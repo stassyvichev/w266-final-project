@@ -1,2 +1,8 @@
 .ipynb_checkpoints
  __pycache__
+sentiment_text_only.csv
+sentiment_text_only.csv.preprocessed
+data_mean_teacher
+results
+mean-teacher/data/
+mean-teacher/mean_teacher/__pycache__
