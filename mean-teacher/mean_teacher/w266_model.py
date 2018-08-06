@@ -1,5 +1,5 @@
 # file where our model of combined mean-teacher and feedforward nn will live.
-"Mean teacher model"
+"Mean teacher model for W266 project, heavily adapted from https://github.com/CuriousAI/mean-teacher/blob/master/tensorflow/mean_teacher/model.py and other files in the mean-teacher repo."
 
 import logging
 import os
