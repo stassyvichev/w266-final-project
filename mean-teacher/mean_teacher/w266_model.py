@@ -39,9 +39,9 @@ class W266Model:
         'teacher_dropout_probability': 0.5,
 
         # Training schedule
-        'rampup_length': 10000,
-        'rampdown_length': 16000,
-        'training_length': 20000,
+        'rampup_length': 5000,
+        'rampdown_length': 8000,
+        'training_length': 10000,
 
         # Output schedule
         'print_span': 125,
@@ -367,9 +367,10 @@ def tower(inputs,
             net = wn.affine_layer(net, hidden_dims[2], activation_fn = lrelu, init = is_initialization)
             net = wn.affine_layer(net, hidden_dims[3], activation_fn = lrelu, init = is_initialization)
             net = slim.dropout(net, 1-dropout_probability, scope = "dropout_probability_2")
-            net = wn.affine_layer(net, hidden_dims[4], activation_fn = lrelu, init = is_initialization)
-            net = wn.affine_layer(net, hidden_dims[5], activation_fn = lrelu, init = is_initialization)
-            net = slim.dropout(net, 1-dropout_probability, scope = "dropout_probability_2")
+            # NOTE expand below in accordance with hidden_dims size and how many affine layers you want
+#             net = wn.affine_layer(net, hidden_dims[4], activation_fn = lrelu, init = is_initialization)
+#             net = wn.affine_layer(net, hidden_dims[5], activation_fn = lrelu, init = is_initialization)
+#             net = slim.dropout(net, 1-dropout_probability, scope = "dropout_probability_3")
             
             primary_logits = wn.fully_connected(net, 2, init=is_initialization)
             secondary_logits = wn.fully_connected(net, 2, init=is_initialization)

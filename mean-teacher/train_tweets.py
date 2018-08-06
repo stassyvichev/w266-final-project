@@ -23,7 +23,7 @@ LOG = logging.getLogger('main')
 
 
 def run(data_seed=42):
-    n_extra_unlabeled = 100000
+    n_extra_unlabeled = 20000
 
     model = W266Model(RunContext(__file__, 0)) 
 
@@ -35,7 +35,11 @@ def run(data_seed=42):
     evaluation_batches_fn = minibatching.evaluation_epoch_generator(tweetData.evaluation)
 
     model.train(training_batches, evaluation_batches_fn)
-
-
+    
+    LOG.info("Result on test set:")
+    tweetDataTest = TweetData(data_seed, test_phase=True);
+    evaluation_test_batches_fn = minibatching.evaluation_epoch_generator(tweetDataTest.evaluation)
+    model.evaluate(evaluation_test_batches_fn)
+    
 if __name__ == "__main__":
     run()
